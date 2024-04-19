@@ -254,19 +254,52 @@ out:
 			log.Infof("Started rescan from block %v (height %d) for %d %s",
 				batch.bs.Hash, batch.bs.Height, numAddrs, noun)
 
-			err := chainClient.Rescan(&batch.bs.Hash, batch.addrs,
-				batch.outpoints)
-			if err != nil {
-				log.Errorf("Rescan for %d %s failed: %v", numAddrs,
-					noun, err)
+			if numAddrs > 0 {
+				err := chainClient.Rescan(&batch.bs.Hash, batch.addrs,
+					batch.outpoints)
+				if err != nil {
+					log.Errorf("Rescan for %d %s failed: %v", numAddrs,
+						noun, err)
+				}
+				batch.done(err)
+			} else {
+				log.Infof("Skipping rescan due to zero addresses to watch")
+				err := w.dispatchRescanFinished()
+				batch.done(err)
 			}
-			batch.done(err)
 		case <-quit:
 			break out
 		}
 	}
 
 	w.wg.Done()
+}
+
+func (w *Wallet) dispatchRescanFinished() error {
+	bestHash, bestHeight, err := w.chainClient.GetBestBlock()
+	if err != nil {
+		log.Errorf("Error getting current height")
+		return err
+	}
+	err = w.catchUpHashes(bestHeight)
+	if err != nil {
+		log.Errorf("Error catching up hashes")
+		return err
+	}
+	w.SetChainSynced(true)
+	bestHeader, err := w.chainClient.GetBlockHeader(bestHash)
+	if err != nil {
+		log.Errorf("Error getting current block header")
+		return err
+	}
+	log.Infof("Sending rescan completion hash %s height %d time %s", bestHash, bestHeight, bestHeader.Timestamp)
+	w.rescanNotifications <- &chain.RescanFinished{
+		Hash:   bestHash,
+		Height: bestHeight,
+		Time:   bestHeader.Timestamp,
+	}
+
+	return nil
 }
 
 // Rescan begins a rescan for all active addresses and unspent outputs of
